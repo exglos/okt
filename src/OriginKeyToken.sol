@@ -108,6 +108,7 @@ pragma solidity 0.8.20;
  */
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
@@ -115,9 +116,9 @@ contract OriginKeyToken is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // ─── Token metadata ───────────────────────────────────────────────────────
-    string public constant name = "Origin Key Token";
-    string public constant symbol = "OKT";
-    uint8 public constant decimals = 0;
+    string  public constant name     = "Origin Key Token";
+    string  public constant symbol   = "OKT";
+    uint8   public constant decimals = 0;
 
     // ─── Reserve asset ────────────────────────────────────────────────────────
     IERC20 public immutable CBBTC;
@@ -127,30 +128,32 @@ contract OriginKeyToken is ReentrancyGuard {
     mapping(address => uint256) public balanceOf;
 
     // ─── Fees & minimums ──────────────────────────────────────────────────────
-    uint256 public constant BUY_FEE = 7;
-    uint256 public constant SELL_FEE = 7;
+    uint256 public constant BUY_FEE      = 7;
+    uint256 public constant SELL_FEE     = 7;
     uint256 public constant INSCRIBE_FEE = 7;
-    uint256 public constant MIN_SATS = 100;
-    uint256 public constant MAX_BUY = 1_000_000; // 0.01 BTC per transaction
+    uint256 public constant MIN_SATS     = 100;
+    uint256 public constant MIN_SELL     = 100;   // prevents sell-fee rounding bypass
+    uint256 public constant MAX_BUY      = 1_000_000; // 0.01 BTC per transaction
 
     // ─── Dividend accumulator — PITcoin exact ────────────────────────────────
     // payoutsOf MUST be int256. MUST use signedSub in sell. Never change this.
     // The accounting equation requires payoutsOf to go negative in normal use.
-    uint256 public constant MAGNITUDE = 2 ** 64;
+    uint256 public constant MAGNITUDE = 2**64;
     uint256 public profitPerToken;
     mapping(address => int256) public payoutsOf;
 
     // ─── Vault registrar ──────────────────────────────────────────────────────
     address public immutable vaultRegistrar;
     mapping(address => bytes32) public vaultRegistry;
-    mapping(address => bool) public isVault;
-    mapping(address => bool) public vaultHasBeenSwept;
+    mapping(address => bool)    public isVault;
+    mapping(address => bool)    public vaultHasBeenSwept;
     mapping(address => uint256) public vaultOrdinal;
-    mapping(address => bool) public vaultHasOrdinal;
+    mapping(address => bool)    public vaultHasOrdinal;
+    mapping(address => string)  public vaultInscriptionId; // Bitcoin Ordinal inscription ID for content rendering
 
     // ─── Ordinal oracle ───────────────────────────────────────────────────────
     address public immutable ordinalOracle;
-    mapping(uint256 => bool) public ordinalHasBeenMoved;
+    mapping(uint256 => bool)    public ordinalHasBeenMoved;
     mapping(uint256 => uint256) public ordinalMovedTimestamp;
     mapping(uint256 => address) public ordinalVaultAddress;
 
@@ -164,21 +167,30 @@ contract OriginKeyToken is ReentrancyGuard {
         address indexed vault,
         bytes32 indexed assetId,
         uint256 ordinalNumber,
-        bool hasOrdinal,
+        bool    hasOrdinal,
         uint256 oktEmbedded,
         uint256 timestamp
     );
-    event VaultSwept(address indexed vault, bytes32 indexed assetId, uint256 amountMoved, uint256 timestamp);
+    event VaultSwept(
+        address indexed vault,
+        bytes32 indexed assetId,
+        uint256 amountMoved,
+        uint256 timestamp
+    );
     event OrdinalMoved(
-        uint256 indexed ordinalNumber, address indexed vault, bytes32 indexed assetId, uint256 timestamp
+        uint256 indexed ordinalNumber,
+        address indexed vault,
+        bytes32 indexed assetId,
+        uint256 timestamp
     );
 
     // ─── Constructor ──────────────────────────────────────────────────────────
     constructor(address _cbbtc) {
         require(_cbbtc != address(0), "cbBTC: zero address");
-        CBBTC = IERC20(_cbbtc);
+        require(IERC20Metadata(_cbbtc).decimals() == 8, "cbBTC: expected 8 decimals");
+        CBBTC          = IERC20(_cbbtc);
         vaultRegistrar = msg.sender;
-        ordinalOracle = msg.sender;
+        ordinalOracle  = msg.sender;
     }
 
     // ─── Modifiers ────────────────────────────────────────────────────────────
@@ -223,7 +235,7 @@ contract OriginKeyToken is ReentrancyGuard {
         require(cbbtcAmount <= MAX_BUY, "Maximum 1,000,000 sats per buy");
         CBBTC.safeTransferFrom(msg.sender, address(this), cbbtcAmount);
 
-        uint256 fee = (cbbtcAmount * BUY_FEE) / 100;
+        uint256 fee    = (cbbtcAmount * BUY_FEE) / 100;
         uint256 tokens = cbbtcAmount - fee;
         require(tokens >= minTokens, "Slippage: too few tokens");
 
@@ -233,12 +245,15 @@ contract OriginKeyToken is ReentrancyGuard {
             tokens += fee; // first buyer gets fee back
         }
 
-        totalSupply += tokens;
+        totalSupply           += tokens;
         balanceOf[msg.sender] += tokens;
         emit Transfer(address(0), msg.sender, tokens);
 
         // PITcoin exact — set baseline to current profitPerToken * tokens
-        payoutsOf[msg.sender] = _signedAdd(payoutsOf[msg.sender], (tokens * profitPerToken) / MAGNITUDE);
+        payoutsOf[msg.sender] = _signedAdd(
+            payoutsOf[msg.sender],
+            (tokens * profitPerToken) / MAGNITUDE
+        );
 
         emit Buy(msg.sender, cbbtcAmount, tokens);
     }
@@ -251,28 +266,29 @@ contract OriginKeyToken is ReentrancyGuard {
     // When selling `tokens` for `taxed` cbBTC:
     //   - totalSupply decreases by tokens
     //   - cbbtcInContract decreases by taxed
-    //   - To maintain the equation, payoutsOf must decrease by:
-    //     taxed + (tokens * profitPerToken) / MAGNITUDE
-    //   - signedSub DECREASES payoutsOf (makes it more negative)
+    //   - Direct cbBTC payment handles `taxed`
+    //   - payoutsOf must decrease only by the burned-token dividend baseline:
+    //     (tokens * profitPerToken) / MAGNITUDE
+    //   - Including `taxed` in payoutsOf would double-count seller proceeds
     //   - _distributeFee happens AFTER payoutsOf update
     //
     // DO NOT change signedSub to signedAdd — that breaks dividend distribution
     // for any wallet that sells and rebuys. PITcoin uses signedSub. Always.
     //
     function sell(uint256 tokens, uint256 minCbbtc) external nonReentrant {
-        require(tokens > 0, "Zero tokens");
+        require(tokens >= MIN_SELL,                  "Minimum 100 sats to sell");
         require(balanceOf[msg.sender] >= tokens, "Insufficient balance");
-        require(totalSupply > tokens, "Cannot sell entire supply");
+        require(totalSupply > tokens,             "Cannot sell entire supply");
 
         _checkVaultSweep(msg.sender, tokens);
 
-        uint256 fee = (tokens * SELL_FEE) / 100;
+        uint256 fee   = (tokens * SELL_FEE) / 100;
         uint256 taxed = tokens - fee;
         require(taxed >= minCbbtc, "Slippage: too little cbBTC");
 
         // 1. Burn tokens
         balanceOf[msg.sender] -= tokens;
-        totalSupply -= tokens;
+        totalSupply            -= tokens;
         emit Transfer(msg.sender, address(0), tokens);
 
         // 2. Release ONLY the dividend baseline for burned tokens.
@@ -292,18 +308,19 @@ contract OriginKeyToken is ReentrancyGuard {
 
     // ─── Transfer — zero fee ──────────────────────────────────────────────────
     function transfer(address to, uint256 tokens) external returns (bool) {
-        require(to != address(0), "Zero address");
+        require(to != address(0),                "Zero address");
+        require(tokens > 0,                      "Zero tokens");
         require(balanceOf[msg.sender] >= tokens, "Insufficient balance");
 
         _checkVaultSweep(msg.sender, tokens);
 
         balanceOf[msg.sender] -= tokens;
-        balanceOf[to] += tokens;
+        balanceOf[to]         += tokens;
         emit Transfer(msg.sender, to, tokens);
 
         uint256 payoutMove = (tokens * profitPerToken) / MAGNITUDE;
         payoutsOf[msg.sender] = _signedSub(payoutsOf[msg.sender], payoutMove);
-        payoutsOf[to] = _signedAdd(payoutsOf[to], payoutMove);
+        payoutsOf[to]         = _signedAdd(payoutsOf[to], payoutMove);
 
         return true;
     }
@@ -331,30 +348,35 @@ contract OriginKeyToken is ReentrancyGuard {
 
         // Mint 1:1 — no fee on reinvest
         uint256 tokens = divs;
-        totalSupply += tokens;
+        totalSupply           += tokens;
         balanceOf[msg.sender] += tokens;
         emit Transfer(address(0), msg.sender, tokens);
 
         // Set baseline for newly minted tokens
-        payoutsOf[msg.sender] = _signedAdd(payoutsOf[msg.sender], (tokens * profitPerToken) / MAGNITUDE);
+        payoutsOf[msg.sender] = _signedAdd(
+            payoutsOf[msg.sender],
+            (tokens * profitPerToken) / MAGNITUDE
+        );
 
         emit Reinvest(msg.sender, tokens);
     }
 
     // ─── Inscribe ─────────────────────────────────────────────────────────────
-    function inscribe(address vault, bytes32 assetId, uint256 cbbtcAmount, uint256 ordinalNumber)
-        external
-        onlyRegistrar
-        nonReentrant
-    {
-        require(vault != address(0), "Vault: zero address");
-        require(assetId != bytes32(0), "Vault: empty asset ID");
-        require(cbbtcAmount >= MIN_SATS, "Vault: minimum 100 sats");
-        require(!isVault[vault], "Vault: already registered");
+    function inscribe(
+        address vault,
+        bytes32 assetId,
+        uint256 cbbtcAmount,
+        uint256 ordinalNumber,
+        string calldata inscriptionId
+    ) external onlyRegistrar nonReentrant {
+        require(vault       != address(0), "Vault: zero address");
+        require(assetId     != bytes32(0), "Vault: empty asset ID");
+        require(cbbtcAmount >= MIN_SATS,   "Vault: minimum 100 sats");
+        require(!isVault[vault],           "Vault: already registered");
 
         CBBTC.safeTransferFrom(msg.sender, address(this), cbbtcAmount);
 
-        uint256 fee = (cbbtcAmount * INSCRIBE_FEE) / 100;
+        uint256 fee    = (cbbtcAmount * INSCRIBE_FEE) / 100;
         uint256 tokens = cbbtcAmount - fee;
 
         if (totalSupply > 0) {
@@ -364,35 +386,48 @@ contract OriginKeyToken is ReentrancyGuard {
         }
 
         // Mint directly into vault
-        totalSupply += tokens;
+        totalSupply      += tokens;
         balanceOf[vault] += tokens;
         emit Transfer(address(0), vault, tokens);
 
         // Set vault payout baseline
-        payoutsOf[vault] = _signedAdd(payoutsOf[vault], (tokens * profitPerToken) / MAGNITUDE);
+        payoutsOf[vault] = _signedAdd(
+            payoutsOf[vault],
+            (tokens * profitPerToken) / MAGNITUDE
+        );
 
         // Register vault
-        vaultRegistry[vault] = assetId;
-        isVault[vault] = true;
+        vaultRegistry[vault]   = assetId;
+        isVault[vault]         = true;
         vaultHasOrdinal[vault] = (ordinalNumber > 0);
 
         if (ordinalNumber > 0) {
-            vaultOrdinal[vault] = ordinalNumber;
+            require(ordinalVaultAddress[ordinalNumber] == address(0), "Ordinal: already registered");
+            require(!ordinalHasBeenMoved[ordinalNumber], "Ordinal: already moved");
+            vaultOrdinal[vault]                = ordinalNumber;
             ordinalVaultAddress[ordinalNumber] = vault;
         }
 
-        emit VaultRegistered(vault, assetId, ordinalNumber, ordinalNumber > 0, tokens, block.timestamp);
+        // Store inscription ID for content rendering (empty string if no ordinal)
+        if (bytes(inscriptionId).length > 0) {
+            vaultInscriptionId[vault] = inscriptionId;
+        }
+
+        emit VaultRegistered(
+            vault, assetId, ordinalNumber,
+            ordinalNumber > 0, tokens, block.timestamp
+        );
     }
 
     // ─── Report Ordinal Moved ─────────────────────────────────────────────────
     // When a Bitcoin Ordinal moves, the provenance link is broken.
     // This also marks the vault as swept — the art's integrity is compromised.
     function reportOrdinalMoved(uint256 ordinalNumber) external onlyOracle {
-        require(ordinalNumber > 0, "Invalid ordinal number");
+        require(ordinalNumber > 0,                   "Invalid ordinal number");
         require(!ordinalHasBeenMoved[ordinalNumber], "Already reported as moved");
-        address vault = ordinalVaultAddress[ordinalNumber];
+        address vault   = ordinalVaultAddress[ordinalNumber];
         bytes32 assetId = vault != address(0) ? vaultRegistry[vault] : bytes32(0);
-        ordinalHasBeenMoved[ordinalNumber] = true;
+        ordinalHasBeenMoved[ordinalNumber]   = true;
         ordinalMovedTimestamp[ordinalNumber] = block.timestamp;
 
         // Mark vault as swept — Ordinal movement breaks provenance
@@ -407,7 +442,7 @@ contract OriginKeyToken is ReentrancyGuard {
     // ─── dividendsOf — PITcoin exact ─────────────────────────────────────────
     function dividendsOf(address user) public view returns (uint256) {
         uint256 gross = (balanceOf[user] * profitPerToken) / MAGNITUDE;
-        int256 paid = payoutsOf[user];
+        int256  paid  = payoutsOf[user];
         if (paid < 0) {
             return gross + uint256(-paid);
         } else {
@@ -418,23 +453,36 @@ contract OriginKeyToken is ReentrancyGuard {
     }
 
     // ─── View: core vault info ────────────────────────────────────────────────
-    function vaultStatus(address vault)
-        external
-        view
-        returns (bool registered, bool swept, uint256 balance, bytes32 assetId)
-    {
-        return (isVault[vault], vaultHasBeenSwept[vault], balanceOf[vault], vaultRegistry[vault]);
+    function vaultStatus(address vault) external view returns (
+        bool    registered,
+        bool    swept,
+        uint256 balance,
+        bytes32 assetId
+    ) {
+        return (
+            isVault[vault],
+            vaultHasBeenSwept[vault],
+            balanceOf[vault],
+            vaultRegistry[vault]
+        );
     }
 
     // ─── View: ordinal info ───────────────────────────────────────────────────
-    function vaultOrdinalStatus(address vault)
-        external
-        view
-        returns (uint256 ordinalNumber, bool hasOrdinal, bool ordinalMoved, uint256 ordinalMovedAt)
-    {
+    function vaultOrdinalStatus(address vault) external view returns (
+        uint256 ordinalNumber,
+        bool    hasOrdinal,
+        bool    ordinalMoved,
+        uint256 ordinalMovedAt,
+        string memory inscriptionId
+    ) {
         uint256 ordNum = vaultOrdinal[vault];
-        bool hasOrd = vaultHasOrdinal[vault];
-        return
-            (ordNum, hasOrd, hasOrd ? ordinalHasBeenMoved[ordNum] : false, hasOrd ? ordinalMovedTimestamp[ordNum] : 0);
+        bool    hasOrd = vaultHasOrdinal[vault];
+        return (
+            ordNum,
+            hasOrd,
+            hasOrd ? ordinalHasBeenMoved[ordNum] : false,
+            hasOrd ? ordinalMovedTimestamp[ordNum] : 0,
+            vaultInscriptionId[vault]
+        );
     }
 }
