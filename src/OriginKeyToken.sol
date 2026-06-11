@@ -230,14 +230,13 @@ contract OriginKeyToken is ReentrancyGuard {
 
     // ─── Buy ──────────────────────────────────────────────────────────────────
     // PITcoin exact — fee returned to first buyer, distributed to holders after
-    function buy(uint256 cbbtcAmount, uint256 minTokens) external nonReentrant {
+    function buy(uint256 cbbtcAmount) external nonReentrant {
         require(cbbtcAmount >= MIN_SATS, "Minimum 100 sats");
         require(cbbtcAmount <= MAX_BUY, "Maximum 1,000,000 sats per buy");
         CBBTC.safeTransferFrom(msg.sender, address(this), cbbtcAmount);
 
         uint256 fee    = (cbbtcAmount * BUY_FEE) / 100;
         uint256 tokens = cbbtcAmount - fee;
-        require(tokens >= minTokens, "Slippage: too few tokens");
 
         if (totalSupply > 0) {
             _distributeFee(fee);
