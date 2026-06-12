@@ -144,8 +144,7 @@ contract OriginKeyToken is ReentrancyGuard {
 
     // ─── Vault registrar ──────────────────────────────────────────────────────
     address public immutable vaultRegistrar;
-    mapping(address => bytes32) public vaultRegistry;
-    mapping(address => bool)    public isVault;
+    mapping(address => bytes32) public vaultRegistry; // bytes32(0) means no vault
     mapping(address => bool)    public vaultHasBeenSwept;
     mapping(address => uint256) public vaultOrdinal;
     mapping(address => bool)    public vaultHasOrdinal;
@@ -222,7 +221,7 @@ contract OriginKeyToken is ReentrancyGuard {
 
     // ─── Vault sweep check ───────────────────────────────────────────────────
     function _checkVaultSweep(address vault, uint256 amount) internal {
-        if (isVault[vault] && !vaultHasBeenSwept[vault]) {
+        if (vaultRegistry[vault] != bytes32(0) && !vaultHasBeenSwept[vault]) {
             vaultHasBeenSwept[vault] = true;
             emit VaultSwept(vault, vaultRegistry[vault], amount, block.timestamp);
         }
@@ -274,7 +273,7 @@ contract OriginKeyToken is ReentrancyGuard {
     // DO NOT change signedSub to signedAdd — that breaks dividend distribution
     // for any wallet that sells and rebuys. PITcoin uses signedSub. Always.
     //
-    function sell(uint256 tokens, uint256 minCbbtc) external nonReentrant {
+    function sell(uint256 tokens) external nonReentrant {
         require(tokens >= MIN_SELL,                  "Minimum 100 sats to sell");
         require(balanceOf[msg.sender] >= tokens, "Insufficient balance");
         require(totalSupply > tokens,             "Cannot sell entire supply");
@@ -283,7 +282,6 @@ contract OriginKeyToken is ReentrancyGuard {
 
         uint256 fee   = (tokens * SELL_FEE) / 100;
         uint256 taxed = tokens - fee;
-        require(taxed >= minCbbtc, "Slippage: too little cbBTC");
 
         // 1. Burn tokens
         balanceOf[msg.sender] -= tokens;
@@ -371,7 +369,7 @@ contract OriginKeyToken is ReentrancyGuard {
         require(vault       != address(0), "Vault: zero address");
         require(assetId     != bytes32(0), "Vault: empty asset ID");
         require(cbbtcAmount >= MIN_SATS,   "Vault: minimum 100 sats");
-        require(!isVault[vault],           "Vault: already registered");
+        require(vaultRegistry[vault] == bytes32(0), "Vault: already registered");
 
         CBBTC.safeTransferFrom(msg.sender, address(this), cbbtcAmount);
 
@@ -397,7 +395,6 @@ contract OriginKeyToken is ReentrancyGuard {
 
         // Register vault
         vaultRegistry[vault]   = assetId;
-        isVault[vault]         = true;
         vaultHasOrdinal[vault] = (ordinalNumber > 0);
 
         if (ordinalNumber > 0) {
@@ -459,7 +456,7 @@ contract OriginKeyToken is ReentrancyGuard {
         bytes32 assetId
     ) {
         return (
-            isVault[vault],
+            vaultRegistry[vault] != bytes32(0),
             vaultHasBeenSwept[vault],
             balanceOf[vault],
             vaultRegistry[vault]

@@ -57,7 +57,7 @@ contract OKTSecurityTest is Test {
             vm.prank(bob); okt.buy(10_000);
             uint256 bobBal = okt.balanceOf(bob);
             if (bobBal > 1) {
-                vm.prank(bob); okt.sell(bobBal - 1, 0);
+                vm.prank(bob); okt.sell(bobBal - 1);
             }
             uint256 bobDivs = okt.dividendsOf(bob);
             if (bobDivs > 0) {
@@ -84,7 +84,7 @@ contract OKTSecurityTest is Test {
 
             uint256 aliceBal = okt.balanceOf(alice);
             if (aliceBal > 1000) {
-                vm.prank(alice); okt.sell(1000, 0);
+                vm.prank(alice); okt.sell(1000);
             }
 
             uint256 bobDivs = okt.dividendsOf(bob);
@@ -148,7 +148,7 @@ contract OKTSecurityTest is Test {
         for (uint i = 0; i < 100; i++) {
             uint256 bobBal = okt.balanceOf(bob);
             if (bobBal > 1 && okt.totalSupply() > 1) {
-                vm.prank(bob); okt.sell(100, 0);
+                vm.prank(bob); okt.sell(100);
             }
         }
 
@@ -238,7 +238,7 @@ contract OKTSecurityTest is Test {
 
         // Vault sells — should trigger VaultSwept
         vm.prank(vault1);
-        okt.sell(1000, 0);
+        okt.sell(1000);
 
         // Check vault is marked as swept
         (bool registered, bool swept,,) = okt.vaultStatus(vault1);
@@ -290,7 +290,7 @@ contract OKTSecurityTest is Test {
 
         // Bob sells everything except 1
         uint256 bobTokens = okt.balanceOf(bob);
-        vm.prank(bob); okt.sell(bobTokens - 1, 0);
+        vm.prank(bob); okt.sell(bobTokens - 1);
 
         // Bob tries to withdraw any remaining dividends
         uint256 bobDivs = okt.dividendsOf(bob);
@@ -316,7 +316,7 @@ contract OKTSecurityTest is Test {
             vm.prank(attacker); okt.buy(10_000);
             uint256 bal = okt.balanceOf(attacker);
             if (bal > 1 && okt.totalSupply() > bal) {
-                vm.prank(attacker); okt.sell(bal - 1, 0);
+                vm.prank(attacker); okt.sell(bal - 1);
             }
             uint256 divs = okt.dividendsOf(attacker);
             if (divs > 0) {
@@ -344,14 +344,14 @@ contract OKTSecurityTest is Test {
         vm.prank(alice); okt.buy(10_000);
         vm.prank(alice);
         vm.expectRevert("Minimum 100 sats to sell");
-        okt.sell(0, 0);
+        okt.sell(0);
     }
 
     function test_sellMoreThanBalanceReverts() public {
         vm.prank(alice); okt.buy(10_000);
         vm.prank(alice);
         vm.expectRevert("Insufficient balance");
-        okt.sell(999_999, 0);
+        okt.sell(999_999);
     }
 
     function test_transferToZeroReverts() public {
@@ -373,7 +373,7 @@ contract OKTSecurityTest is Test {
         uint256 bal = okt.balanceOf(alice);
         vm.prank(alice);
         vm.expectRevert("Cannot sell entire supply");
-        okt.sell(bal, 0);
+        okt.sell(bal);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

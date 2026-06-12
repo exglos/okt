@@ -63,7 +63,7 @@ contract OKTHandler is Test {
         if (okt.totalSupply() <= amount) return;
 
         vm.prank(actor);
-        try okt.sell(amount, 0) {} catch {}
+        try okt.sell(amount) {} catch {}
     }
 
     // ─── Withdraw ─────────────────────────────────────────────────────────────

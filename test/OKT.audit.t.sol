@@ -108,7 +108,7 @@ contract OKTAuditTest is Test {
         // Attacker back-runs with sell
         uint256 bobBal = okt.balanceOf(bob);
         if (bobBal > 1 && okt.totalSupply() > bobBal) {
-            vm.prank(bob); okt.sell(bobBal - 1, 0);
+            vm.prank(bob); okt.sell(bobBal - 1);
         }
         uint256 bobDivs = okt.dividendsOf(bob);
         if (bobDivs > 0) {
@@ -133,7 +133,7 @@ contract OKTAuditTest is Test {
         // Immediately sell
         uint256 bobBal = okt.balanceOf(bob);
         if (bobBal > 1 && okt.totalSupply() > bobBal) {
-            vm.prank(bob); okt.sell(bobBal - 1, 0);
+            vm.prank(bob); okt.sell(bobBal - 1);
         }
 
         // Collect any dividends
@@ -216,7 +216,7 @@ contract OKTAuditTest is Test {
         // Track all cbBTC leaving contract
         uint256 bobBefore = cbbtc.balanceOf(bob);
         uint256 bobBal = okt.balanceOf(bob);
-        vm.prank(bob); okt.sell(bobBal - 1, 0);
+        vm.prank(bob); okt.sell(bobBal - 1);
         uint256 bobDivs = okt.dividendsOf(bob);
         if (bobDivs > 0) {
             vm.prank(bob); okt.withdraw();
@@ -271,7 +271,7 @@ contract OKTAuditTest is Test {
 
         uint256 bobBal = okt.balanceOf(bob);
         uint256 gasBefore = gasleft();
-        vm.prank(bob); okt.sell(bobBal - 1, 0);
+        vm.prank(bob); okt.sell(bobBal - 1);
         uint256 gasUsed = gasBefore - gasleft();
 
         assertLt(gasUsed, 200_000, "Sell gas cost grew unreasonably");
@@ -341,7 +341,7 @@ contract OKTAuditTest is Test {
 
         vm.prank(bob);
         vm.expectRevert("Minimum 100 sats to sell");
-        okt.sell(99, 0);
+        okt.sell(99);
     }
 
     function test_sellMinimumChargesFee() public {
@@ -350,7 +350,7 @@ contract OKTAuditTest is Test {
 
         uint256 bobBefore = cbbtc.balanceOf(bob);
         vm.prank(bob);
-        okt.sell(100, 0);
+        okt.sell(100);
         uint256 bobAfter = cbbtc.balanceOf(bob);
         assertEq(bobAfter - bobBefore, 93, "Minimum sell should charge 7 sats");
     }
